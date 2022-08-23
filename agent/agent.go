@@ -44,6 +44,7 @@ import (
 	compute "google.golang.org/api/compute/v1"
 
 	"github.com/google/inverting-proxy/agent/banner"
+	"github.com/google/inverting-proxy/agent/cache_cookies"
 	"github.com/google/inverting-proxy/agent/metrics"
 	"github.com/google/inverting-proxy/agent/sessions"
 	"github.com/google/inverting-proxy/agent/utils"
@@ -83,6 +84,8 @@ var (
 	rewriteWebsocketHost    = flag.Bool("rewrite-websocket-host", false, "Whether to rewrite the Host header to the original request when shimming a websocket connection")
 	stripCredentials        = flag.Bool("strip-credentials", false, "Whether to strip the Authorization header from all requests.")
 
+	cacheCookieHeaderPath = flag.String("cache-cookie-headerpath", "Cookie", "Path to the header that should serve as key for caching cookies")
+
 	projectID                = flag.String("monitoring-project-id", "", "Name of the GCP project id")
 	metricDomain             = flag.String("metric-domain", "", "Domain under which to write metrics eg. notebooks.googleapis.com")
 	monitoringEndpoint       = flag.String("monitoring-endpoint", "monitoring.googleapis.com:443", "The endpoint to which to write metrics. Eg: monitoring.googleapis.com corresponds to Cloud Monarch")
@@ -90,8 +93,9 @@ var (
 	monitoringResourceLabels = flag.String("monitoring-resource-labels", "", "Comma separated key value pairs specifying the resource labels. Eg: 'instance-id=12345678901234,instance-zone=us-west1-a")
 	gracefulShutdownTimeout  = flag.Duration("graceful-shutdown-timeout", 0, "Timeout for graceful shutdown. Enabled only if greater than 0.")
 
-	sessionLRU    *sessions.Cache
-	metricHandler *metrics.MetricHandler
+	sessionLRU      *sessions.Cache
+	cacheCookiesLRU *cache_cookies.Cache
+	metricHandler   *metrics.MetricHandler
 )
 
 func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) (http.Handler, error) {
@@ -102,6 +106,7 @@ func hostProxy(ctx context.Context, host, shimPath string, injectShimCode bool) 
 	hostProxy.FlushInterval = 100 * time.Millisecond
 	var h http.Handler = hostProxy
 	h = sessionLRU.SessionHandler(h, metricHandler)
+	h = cacheCookiesLRU.SessionHandler(*cacheCookieHeaderPath, h, metricHandler)
 	if shimPath != "" {
 		var err error
 		// Note that we pass in the sessionHandler to the websocket proxy twice (h and sessionLRU.SessionHandler)
@@ -317,6 +322,12 @@ func main() {
 	}
 	if *sessionCookieName != "" {
 		sessionLRU = sessions.NewCache(*sessionCookieName, *sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
+	}
+	if *cacheCookieHeaderPath == "" {
+		*cacheCookieHeaderPath = utils.GetCacheCookiesHeaderPath()
+	}
+	if *cacheCookieHeaderPath != "" {
+		cacheCookiesLRU = cache_cookies.NewCache(*sessionCookieTimeout, *sessionCookieCacheLimit, *disableSSLForTest)
 	}
 	mh, err := metrics.NewMetricHandler(ctx, *projectID, *monitoringResourceType, *monitoringResourceLabels, *metricDomain, *monitoringEndpoint)
 	metricHandler = mh

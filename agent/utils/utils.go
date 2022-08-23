@@ -167,6 +167,18 @@ func hasVMServiceAccount() bool {
 	return true
 }
 
+func GetCacheCookiesHeaderPath() string {
+	if !metadata.OnGCE() {
+		return ""
+	}
+
+	attribute, err := metadata.InstanceAttributeValue("cache_cookies_header_path")
+	if err == nil {
+		return attribute
+	}
+	return "Cookie"
+}
+
 func getVMID(audience string) string {
 	for {
 		idPath := fmt.Sprintf("instance/service-accounts/default/identity?format=full&audience=%s", audience)
